@@ -495,7 +495,11 @@
 
             onMouseDown(e) {
                 if(e.button === 2) { // Right Click
-                    if(e.shiftKey) {
+                    if(e.ctrlKey || e.metaKey) {
+                        this.state.mode = 'zoom_drag';
+                        this.container.style.cursor = 'ns-resize';
+                        this.state.zoomTarget = this.getWorldPos(e.clientX, e.clientY);
+                    } else if(e.shiftKey) {
                         this.state.mode = 'pan'; // 2D Pan
                         this.container.style.cursor = 'grab';
                     } else {
@@ -536,6 +540,25 @@
                     if(node) {
                         if(node.el.classList.contains('ghost-node')) return; // Ignore ghosted nodes
                         
+                        if(e.altKey) {
+                            let n = node.type === 'image' ? new ImageNode(node.base_x, node.base_y, node.base_z, node.imgUrl) : new Base3DNode(node.base_x, node.base_y, node.base_z);
+                            n.title = node.title; n.current_text = node.current_text;
+                            n.width = node.width; n.height = node.height; n.opacity = node.opacity;
+                            n.tags = [...node.tags]; n.font_size = node.font_size; n.text_color = node.text_color;
+                            n.is_bold = node.is_bold; n.is_italic = node.is_italic; n.is_strike = node.is_strike;
+                            n.applyTextFormatting();
+                            this.addNode(n);
+                            
+                            this.clearSelection();
+                            n.selected = true;
+                            this.state.mode = 'drag_node';
+                            this.state.targetNode = n;
+                            this.state.startMouse = {x: e.clientX, y: e.clientY};
+                            this.state.lastMouse = {x: e.clientX, y: e.clientY};
+                            this.closeMenu();
+                            return;
+                        }
+
                         this.state.mode = 'drag_node';
                         this.state.targetNode = node;
                         this.state.startMouse = {x: e.clientX, y: e.clientY};
@@ -576,6 +599,17 @@
                 if(this.state.mode === 'pan') {
                     this.cam.panX += dxDelta;
                     this.cam.panY += dyDelta;
+                }
+                else if(this.state.mode === 'zoom_drag') {
+                    let deltaDist = dyDelta * 5;
+                    let oldDist = this.cam.distance;
+                    this.cam.distance += deltaDist;
+                    this.cam.distance = Math.max(200, this.cam.distance);
+                    let factor = (oldDist - this.cam.distance) / oldDist;
+                    
+                    this.cam.x += (this.state.zoomTarget.x - this.cam.x) * factor;
+                    this.cam.y += (this.state.zoomTarget.y - this.cam.y) * factor;
+                    this.cam.z += (this.state.zoomTarget.z - this.cam.z) * factor;
                 }
                 else if(this.state.mode === 'orbit') {
                     this.cam.yaw -= dxDelta * 0.005;
@@ -660,10 +694,10 @@
                         }
                     }
                 }
-                else if(this.state.mode === 'pan' || this.state.mode === 'orbit') {
+                else if(this.state.mode === 'pan' || this.state.mode === 'orbit' || this.state.mode === 'zoom_drag') {
                     // Check distance to see if it was a drag or a click
                     let dist = Math.hypot(e.clientX - this.state.startMouse.x, e.clientY - this.state.startMouse.y);
-                    if(dist < 5 && e.button === 2) {
+                    if(dist < 5 && e.button === 2 && this.state.mode !== 'zoom_drag') {
                         this.showContextMenu(e.clientX, e.clientY);
                     }
                     this.container.style.cursor = 'default';
@@ -1016,7 +1050,7 @@
             }
 
             physicsLoop() {
-                if(!this.connections.length && !this.nodes.some(n => n.type === 'image')) return;
+                if(!this.connections.length && this.nodes.length < 2) return;
                 let targetDist = 400; let springK = 0.02; let repelK = 150000;
                 let connectedIds = new Set();
                 this.connections.forEach(c => { connectedIds.add(c[0]); connectedIds.add(c[1]); });
@@ -1027,18 +1061,15 @@
                         let dx = n2.base_x - n1.base_x; let dy = n2.base_y - n1.base_y; let dz = n2.base_z - n1.base_z;
                         let dist = Math.hypot(dx, dy, dz) || 1;
                         
-                        // 물리 효과: 이미지가 텍스트를 가리지 않도록 텍스트 노드를 밀어냄 (Image Repulsion)
-                        let isImageRepulsion = (n1.type === 'image' || n2.type === 'image');
-                        if (isImageRepulsion && dist < targetDist * 1.5) {
+                        let r1 = Math.max(n1.width, n1.height) / 2;
+                        let r2 = Math.max(n2.width, n2.height) / 2;
+                        let collisionDist = r1 + r2 + 100;
+                        
+                        if (dist < collisionDist) {
                             let force = (repelK * 2.0) / (dist * dist);
                             let fx = (dx/dist)*force; let fy = (dy/dist)*force; let fz = (dz/dist)*force;
-                            if (n1.type === 'text' && !n1.selected) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
-                            if (n2.type === 'text' && !n2.selected) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
-                            // 이미지끼리의 겹침 방지
-                            if (n1.type === 'image' && n2.type === 'image') {
-                                if (!n1.selected) { n1.vx -= fx/2; n1.vy -= fy/2; n1.vz -= fz/2; }
-                                if (!n2.selected) { n2.vx += fx/2; n2.vy += fy/2; n2.vz += fz/2; }
-                            }
+                            if (!n1.selected) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
+                            if (!n2.selected) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
                         }
 
                         if(!connectedIds.has(n1.id) || !connectedIds.has(n2.id)) continue;
@@ -1057,12 +1088,9 @@
                     let dx = n2.base_x - n1.base_x; let dy = n2.base_y - n1.base_y; let dz = n2.base_z - n1.base_z;
                     let dist = Math.hypot(dx, dy, dz) || 1;
                     
-                    // 이미지 노드인 경우 스프링 타겟 거리를 이미지 사이즈에 비례해 확장 (겹침 완전 차단)
-                    let currentTargetDist = targetDist;
-                    if (n1.type === 'image' || n2.type === 'image') {
-                        let imgNode = n1.type === 'image' ? n1 : n2;
-                        currentTargetDist = targetDist + Math.max(imgNode.width, imgNode.height) * 0.8;
-                    }
+                    let r1 = Math.max(n1.width, n1.height) / 2;
+                    let r2 = Math.max(n2.width, n2.height) / 2;
+                    let currentTargetDist = Math.max(targetDist, r1 + r2 + 150);
 
                     let force = (dist - currentTargetDist) * springK;
                     let fx = (dx/dist)*force; let fy = (dy/dist)*force; let fz = (dz/dist)*force;
