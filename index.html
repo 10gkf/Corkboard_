@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Spatial Archiving Canvas</title>
+    <title>Space Archiving Canvas</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -546,7 +546,7 @@
                         if(node.el.classList.contains('ghost-node')) return; // Ignore ghosted nodes
                         
                         if(e.altKey) {
-                            let n = node.type === 'image' ? new ImageNode(node.base_x, node.base_y, node.base_z, node.imgUrl) : new Base3DNode(node.base_x, node.base_y, node.base_z);
+                            let n = node.type === 'image' ? new ImageNode(node.base_x + 20, node.base_y + 20, node.base_z, node.imgUrl) : new Base3DNode(node.base_x + 20, node.base_y + 20, node.base_z);
                             n.title = node.title; n.current_text = node.current_text;
                             n.width = node.width; n.height = node.height; n.opacity = node.opacity;
                             n.tags = [...node.tags]; n.font_size = node.font_size; n.text_color = node.text_color;
@@ -1087,14 +1087,16 @@
                     for(let j=i+1; j<this.nodes.length; j++) {
                         let n1 = this.nodes[i]; let n2 = this.nodes[j];
                         let dx = n2.base_x - n1.base_x; let dy = n2.base_y - n1.base_y; let dz = n2.base_z - n1.base_z;
-                        let dist = Math.hypot(dx, dy, dz) || 1;
+                        let dist = Math.hypot(dx, dy, dz);
+                        if(dist < 20) dist = 20; // 겹쳤을 때 무한 튕김 방지
                         
                         let r1 = Math.max(n1.width, n1.height) / 2;
                         let r2 = Math.max(n2.width, n2.height) / 2;
                         let collisionDist = r1 + r2 + 100;
                         
                         if (dist < collisionDist) {
-                            let force = (repelK * 2.0) / (dist * dist);
+                            // Math.min(10, ...) 을 통해 최대 반발력을 제한하여 부드럽게 밀려나도록 수정
+                            let force = Math.min(10, (repelK * 2.0) / (dist * dist));
                             let fx = (dx/dist)*force; let fy = (dy/dist)*force; let fz = (dz/dist)*force;
                             if (!n1.selected) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
                             if (!n2.selected) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
@@ -1102,7 +1104,8 @@
 
                         if(!connectedIds.has(n1.id) || !connectedIds.has(n2.id)) continue;
                         if(dist < targetDist * 1.5) {
-                            let force = repelK / (dist * dist);
+                            // 여기에도 동일하게 최대 반발력 한계(10)를 설정
+                            let force = Math.min(10, repelK / (dist * dist));
                             let fx = (dx/dist)*force; let fy = (dy/dist)*force; let fz = (dz/dist)*force;
                             if(!n1.selected) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
                             if(!n2.selected) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
@@ -1114,7 +1117,8 @@
                     let n1 = this.nodes.find(n => n.id === c[0]); let n2 = this.nodes.find(n => n.id === c[1]);
                     if(!n1 || !n2) return;
                     let dx = n2.base_x - n1.base_x; let dy = n2.base_y - n1.base_y; let dz = n2.base_z - n1.base_z;
-                    let dist = Math.hypot(dx, dy, dz) || 1;
+                    let dist = Math.hypot(dx, dy, dz);
+                    if(dist < 20) dist = 20; // 겹쳤을 때 무한 튕김 방지
                     
                     let r1 = Math.max(n1.width, n1.height) / 2;
                     let r2 = Math.max(n2.width, n2.height) / 2;
