@@ -408,11 +408,11 @@
                 }
 
                 // Draw Linking Line (Middle Click)
-                if(this.state.mode === 'link' && this.state.linkStart && this.state.lastMouse) {
+                if((this.state.mode === 'link' || this.state.mode === 'unlink') && this.state.linkStart && this.state.lastMouse) {
                     let p1 = this.project3D(this.state.linkStart.base_x, this.state.linkStart.base_y, this.state.linkStart.base_z);
                     if(p1) {
                         let rect = this.container.getBoundingClientRect();
-                        this.ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+                        this.ctx.strokeStyle = this.state.mode === 'unlink' ? 'rgba(239, 68, 68, 0.8)' : 'rgba(255,255,255,0.8)';
                         this.ctx.setLineDash([5, 5]);
                         this.ctx.beginPath();
                         this.ctx.moveTo(cx + p1.sx, cy + p1.sy);
@@ -427,6 +427,7 @@
 
             bindEvents() {
                 this.container.addEventListener('contextmenu', e => { e.preventDefault(); });
+                this.container.addEventListener('dragstart', e => e.preventDefault());
                 
                 this.container.addEventListener('mousedown', e => this.onMouseDown(e));
                 window.addEventListener('mousemove', e => this.onMouseMove(e));
@@ -515,7 +516,11 @@
                 if(e.button === 1) { // Middle Click
                     let node = this.getNodeFromEvent(e);
                     if(node) {
-                        this.state.mode = 'link';
+                        if (e.ctrlKey || e.metaKey) {
+                            this.state.mode = 'unlink';
+                        } else {
+                            this.state.mode = 'link';
+                        }
                         this.state.linkStart = node;
                         this.state.lastMouse = {x: e.clientX, y: e.clientY};
                     }
@@ -589,6 +594,11 @@
             }
 
             onMouseMove(e) {
+                if (e.buttons === 0 && this.state.mode !== 'idle') {
+                    this.onMouseUp(e);
+                    return;
+                }
+
                 let dxTotal = e.clientX - this.state.startMouse.x;
                 let dyTotal = e.clientY - this.state.startMouse.y;
                 
@@ -684,13 +694,22 @@
                         }
                     });
                 }
-                else if(this.state.mode === 'link' && this.state.linkStart) {
+                else if((this.state.mode === 'link' || this.state.mode === 'unlink') && this.state.linkStart) {
                     let target = this.getNodeFromEvent(e);
                     if(target && target !== this.state.linkStart) {
                         let pair = [this.state.linkStart.id, target.id].sort();
-                        if(!this.connections.find(c => c[0] === pair[0] && c[1] === pair[1])) {
-                            this.connections.push(pair);
-                            this.saveState();
+                        
+                        if (this.state.mode === 'link') {
+                            if(!this.connections.find(c => c[0] === pair[0] && c[1] === pair[1])) {
+                                this.connections.push(pair);
+                                this.saveState();
+                            }
+                        } else if (this.state.mode === 'unlink') {
+                            let prevLen = this.connections.length;
+                            this.connections = this.connections.filter(c => c[0] !== pair[0] || c[1] !== pair[1]);
+                            if (prevLen !== this.connections.length) {
+                                this.saveState();
+                            }
                         }
                     }
                 }
@@ -999,23 +1018,32 @@
 
             saveModal() {
                 let n = this.state.editingNode;
-                if(!n) return;
-                n.title = document.getElementById('prop-title').value;
-                n.current_text = document.getElementById('prop-text').value;
-                n.font_size = parseInt(document.getElementById('prop-size').value) || 14;
-                n.opacity = parseInt(document.getElementById('prop-opacity').value) / 100;
-                n.is_bold = document.getElementById('prop-bold').classList.contains('bg-blue-500');
-                n.is_italic = document.getElementById('prop-italic').classList.contains('bg-blue-500');
-                n.is_strike = document.getElementById('prop-strike').classList.contains('bg-blue-500');
                 
-                let tagsStr = document.getElementById('prop-tags').value;
-                n.tags = tagsStr.split(',').map(t => t.replace(/^#/, '').trim()).filter(t => t.length > 0);
-                
-                n.applyTextFormatting();
-                n.updateDOM();
-                this.updateTagsUI();
-                this.saveState();
+                if(n) {
+                    n.title = document.getElementById('prop-title').value;
+                    n.current_text = document.getElementById('prop-text').value;
+                    n.font_size = parseInt(document.getElementById('prop-size').value) || 14;
+                    n.opacity = parseInt(document.getElementById('prop-opacity').value) / 100;
+                    n.is_bold = document.getElementById('prop-bold').classList.contains('bg-blue-500');
+                    n.is_italic = document.getElementById('prop-italic').classList.contains('bg-blue-500');
+                    n.is_strike = document.getElementById('prop-strike').classList.contains('bg-blue-500');
+                    
+                    let tagsStr = document.getElementById('prop-tags').value;
+                    n.tags = tagsStr.split(',').map(t => t.replace(/^#/, '').trim()).filter(t => t.length > 0);
+                    
+                    n.applyTextFormatting();
+                    n.updateDOM();
+                    this.updateTagsUI();
+                }
+
+                // 모달을 무조건 먼저 닫아줍니다. 
+                // (saveState 에러 때문에 모달이 안 닫히는 현상을 완벽 차단)
                 document.getElementById('node-modal').classList.add('hidden');
+                this.state.editingNode = null;
+
+                if (n) {
+                    this.saveState();
+                }
             }
 
             updateTagsUI() {
@@ -1144,7 +1172,13 @@
                 this.history.push(data);
                 if(this.history.length > 50) this.history.shift();
                 this.historyIdx = this.history.length - 1;
-                localStorage.setItem('spatial_archive_save', JSON.stringify(data));
+                
+                // 브라우저 로컬 스토리지에 자동 저장할 때 이미지 용량 초과 에러 방어 처리
+                try {
+                    localStorage.setItem('spatial_archive_save', JSON.stringify(data));
+                } catch(e) {
+                    console.warn("로컬 저장소 용량 초과로 자동 저장에 실패했습니다. (크기가 큰 이미지가 많을 수 있습니다)", e);
+                }
             }
 
             undo() {
