@@ -783,7 +783,7 @@
                     if(e.code === 'KeyC') { e.preventDefault(); this.copySelection(); }
                     else if(e.code === 'KeyX') { e.preventDefault(); this.cutSelection(); }
                     else if(e.code === 'KeyS') { e.preventDefault(); this.saveToFile(); }
-                    else if(e.code === 'KeyH') { 
+                    else if(e.code === 'Digit2') { 
                         e.preventDefault();
                         let selectedNodes = this.nodes.filter(n => n.selected);
                         if(selectedNodes.length === 0) return;
