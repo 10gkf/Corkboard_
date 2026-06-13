@@ -18,6 +18,7 @@
         .node { position: absolute; transform: translate(-50%, -50%); transform-origin: center; background: rgba(30, 30, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 8px; cursor: default; box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: flex; flex-direction: column; overflow: hidden; }
         .node.selected { border-color: #60a5fa; box-shadow: 0 0 10px rgba(96, 165, 250, 0.5); }
         .node.ghost-node { opacity: 0.15 !important; filter: grayscale(100%); pointer-events: none; border-color: transparent; }
+        .node.locked { outline: 2px solid white; outline-offset: 2px; }
         
         .resize-handle { position: absolute; width: 12px; height: 12px; background: transparent; z-index: 30; }
         .resize-tl { top: 0; left: 0; cursor: nwse-resize; }
@@ -160,6 +161,7 @@
                 this.is_bold = false; this.is_italic = false; this.is_strike = false;
                 this.opacity = 1.0;
                 this.selected = false;
+                this.isLocked = false;
                 this.type = 'text';
 
                 this.el = document.createElement('div');
@@ -223,6 +225,9 @@
                 }
                 if(this.selected) this.el.classList.add('selected');
                 else this.el.classList.remove('selected');
+
+                if(this.isLocked) this.el.classList.add('locked');
+                else this.el.classList.remove('locked');
             }
 
             destroy() {
@@ -268,6 +273,7 @@
                     copiedNodes: []
                 };
 
+                this.fileHandle = null; // 저장 경로 유지를 위한 핸들 추가
                 this.history = [];
                 this.historyIdx = -1;
 
@@ -281,6 +287,20 @@
 
                 this.loadFromStorage();
                 if(this.nodes.length === 0) this.createSampleData();
+            }
+
+            // 알림 메시지 띄우는 유틸리티 함수
+            showToast(msg) {
+                let t = document.getElementById('toast-message');
+                if(!t) {
+                    t = document.createElement('div');
+                    t.id = 'toast-message';
+                    t.className = 'fixed top-4 right-4 bg-[#2a2a2a] border border-gray-600 text-white px-4 py-2 rounded shadow-lg transition-opacity duration-300 opacity-0 pointer-events-none z-[4000]';
+                    document.body.appendChild(t);
+                }
+                t.innerText = msg;
+                t.style.opacity = '1';
+                setTimeout(() => t.style.opacity = '0', 2500);
             }
 
             resizeCanvas() {
@@ -477,6 +497,8 @@
                     reader.onload = ev => {
                         try {
                             this.loadData(JSON.parse(ev.target.result));
+                            this.fileHandle = null; // 파일을 새로 불러오면 저장 경로 초기화
+                            this.showToast("파일을 성공적으로 불러왔습니다.");
                         } catch(err) { alert("Failed to load file."); }
                     };
                     reader.readAsText(file);
@@ -636,11 +658,13 @@
                     let ldx = dx_cam * Math.cos(-this.cam.yaw) - dz1 * Math.sin(-this.cam.yaw);
                     let ldz = dx_cam * Math.sin(-this.cam.yaw) + dz1 * Math.cos(-this.cam.yaw);
 
-                    this.nodes.filter(n => n.selected).forEach(n => {
+                    this.nodes.filter(n => n.selected && !n.isLocked).forEach(n => {
                         n.base_x += ldx; n.base_y += ldy; n.base_z += ldz;
                     });
                 }
                 else if(this.state.mode === 'resize_node' && this.state.targetNode) {
+                    if (this.state.targetNode.isLocked) return; // 잠금 시 노드 크기 조절 막기
+                    
                     let scale = this.project3D(this.state.targetNode.base_x, this.state.targetNode.base_y, this.state.targetNode.base_z).scale;
                     let ndx = dxTotal / scale;
                     let ndy = dyTotal / scale;
@@ -758,8 +782,22 @@
                 if((e.ctrlKey || e.metaKey)) {
                     if(e.code === 'KeyC') { e.preventDefault(); this.copySelection(); }
                     else if(e.code === 'KeyX') { e.preventDefault(); this.cutSelection(); }
-                    // 브라우저의 기본 paste 이벤트를 막지 않도록 'KeyV' 분기를 제거합니다.
                     else if(e.code === 'KeyS') { e.preventDefault(); this.saveToFile(); }
+                    else if(e.code === 'KeyH') { 
+                        e.preventDefault();
+                        let selectedNodes = this.nodes.filter(n => n.selected);
+                        if(selectedNodes.length === 0) return;
+
+                        if(e.shiftKey) {
+                            selectedNodes.forEach(n => n.isLocked = false);
+                            this.showToast("🔓 선택된 노드 잠금 해제됨");
+                        } else {
+                            selectedNodes.forEach(n => n.isLocked = true);
+                            this.showToast("🔒 선택된 노드 잠금됨");
+                        }
+                        selectedNodes.forEach(n => n.updateDOM());
+                        this.saveState();
+                    }
                     else if(e.code === 'KeyZ') {
                         e.preventDefault();
                         if(e.shiftKey) this.redo(); else this.undo();
@@ -775,7 +813,6 @@
                 
                 let clipboardData = e.clipboardData || window.clipboardData;
                 
-                // 클립보드 데이터가 없는 경우 앱 내부에 저장된 노드 복사본을 붙여넣습니다.
                 if (!clipboardData) {
                     this.pasteFromAppClipboard();
                     return;
@@ -798,7 +835,6 @@
                                 let w = this.getWorldPos(this.state.lastMouse.x || window.innerWidth/2, this.state.lastMouse.y || window.innerHeight/2);
                                 let node = new ImageNode(w.x, w.y, w.z, event.target.result);
                                 
-                                // Resize constraint
                                 let ratio = img.width / img.height;
                                 let targetW = img.width;
                                 if(targetW > 300) targetW = 300;
@@ -810,11 +846,10 @@
                             img.src = event.target.result;
                         };
                         reader.readAsDataURL(blob);
-                        return; // 이미지를 성공적으로 찾았으므로 함수 종료
+                        return;
                     }
                 }
                 
-                // 외부 시스템 클립보드에 이미지 파일이 없었다면, 앱 내부 클립보드의 노드를 붙여넣습니다.
                 if (!hasImage) {
                     this.pasteFromAppClipboard();
                 }
@@ -831,11 +866,9 @@
                     reader.onload = (event) => {
                         let img = new Image();
                         img.onload = () => {
-                            // 마우스 드롭 위치를 3D 월드 좌표로 변환하여 생성
                             let w = this.getWorldPos(e.clientX, e.clientY);
                             let node = new ImageNode(w.x, w.y, w.z, event.target.result);
                             
-                            // 이미지 비율 및 초기 크기(최대 300px) 설정
                             let ratio = img.width / img.height;
                             let targetW = img.width;
                             if(targetW > 300) targetW = 300;
@@ -917,7 +950,7 @@
                     width: n.width, height: n.height, opacity: n.opacity,
                     tags: [...n.tags], font_size: n.font_size, text_color: n.text_color,
                     is_bold: n.is_bold, is_italic: n.is_italic, is_strike: n.is_strike,
-                    imgUrl: n.imgUrl,
+                    imgUrl: n.imgUrl, isLocked: n.isLocked,
                     offsetX: n.base_x - this.cam.x, offsetY: n.base_y - this.cam.y, offsetZ: n.base_z - this.cam.z
                 }));
             }
@@ -941,6 +974,7 @@
                     n.width = src.width; n.height = src.height; n.opacity = src.opacity !== undefined ? src.opacity : 1.0;
                     n.tags = [...src.tags]; n.font_size = src.font_size; n.text_color = src.text_color;
                     n.is_bold = src.is_bold; n.is_italic = src.is_italic; n.is_strike = src.is_strike;
+                    n.isLocked = src.isLocked || false;
                     n.applyTextFormatting();
                     n.selected = true;
                     this.nodes.push(n);
@@ -975,7 +1009,6 @@
                     colorsDiv.appendChild(btn);
                 });
 
-                // Populate available tags
                 let allTags = new Set();
                 this.nodes.forEach(n => n.tags.forEach(t => allTags.add(t)));
                 let availableTagsDiv = document.getElementById('prop-available-tags');
@@ -1002,7 +1035,7 @@
                             if (!tags.includes(t)) {
                                 tags.push(t);
                                 input.value = tags.join(', ');
-                                btn.remove(); // Hide after clicking
+                                btn.remove();
                             }
                         };
                         availableTagsDiv.appendChild(btn);
@@ -1036,8 +1069,6 @@
                     this.updateTagsUI();
                 }
 
-                // 모달을 무조건 먼저 닫아줍니다. 
-                // (saveState 에러 때문에 모달이 안 닫히는 현상을 완벽 차단)
                 document.getElementById('node-modal').classList.add('hidden');
                 this.state.editingNode = null;
 
@@ -1088,27 +1119,25 @@
                         let n1 = this.nodes[i]; let n2 = this.nodes[j];
                         let dx = n2.base_x - n1.base_x; let dy = n2.base_y - n1.base_y; let dz = n2.base_z - n1.base_z;
                         let dist = Math.hypot(dx, dy, dz);
-                        if(dist < 20) dist = 20; // 겹쳤을 때 무한 튕김 방지
+                        if(dist < 20) dist = 20; 
                         
                         let r1 = Math.max(n1.width, n1.height) / 2;
                         let r2 = Math.max(n2.width, n2.height) / 2;
                         let collisionDist = r1 + r2 + 100;
                         
                         if (dist < collisionDist) {
-                            // Math.min(10, ...) 을 통해 최대 반발력을 제한하여 부드럽게 밀려나도록 수정
                             let force = Math.min(10, (repelK * 2.0) / (dist * dist));
                             let fx = (dx/dist)*force; let fy = (dy/dist)*force; let fz = (dz/dist)*force;
-                            if (!n1.selected) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
-                            if (!n2.selected) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
+                            if (!n1.selected && !n1.isLocked) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
+                            if (!n2.selected && !n2.isLocked) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
                         }
 
                         if(!connectedIds.has(n1.id) || !connectedIds.has(n2.id)) continue;
                         if(dist < targetDist * 1.5) {
-                            // 여기에도 동일하게 최대 반발력 한계(10)를 설정
                             let force = Math.min(10, repelK / (dist * dist));
                             let fx = (dx/dist)*force; let fy = (dy/dist)*force; let fz = (dz/dist)*force;
-                            if(!n1.selected) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
-                            if(!n2.selected) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
+                            if(!n1.selected && !n1.isLocked) { n1.vx -= fx; n1.vy -= fy; n1.vz -= fz; }
+                            if(!n2.selected && !n2.isLocked) { n2.vx += fx; n2.vy += fy; n2.vz += fz; }
                         }
                     }
                 }
@@ -1118,7 +1147,7 @@
                     if(!n1 || !n2) return;
                     let dx = n2.base_x - n1.base_x; let dy = n2.base_y - n1.base_y; let dz = n2.base_z - n1.base_z;
                     let dist = Math.hypot(dx, dy, dz);
-                    if(dist < 20) dist = 20; // 겹쳤을 때 무한 튕김 방지
+                    if(dist < 20) dist = 20; 
                     
                     let r1 = Math.max(n1.width, n1.height) / 2;
                     let r2 = Math.max(n2.width, n2.height) / 2;
@@ -1126,12 +1155,12 @@
 
                     let force = (dist - currentTargetDist) * springK;
                     let fx = (dx/dist)*force; let fy = (dy/dist)*force; let fz = (dz/dist)*force;
-                    if(!n1.selected) { n1.vx += fx; n1.vy += fy; n1.vz += fz; }
-                    if(!n2.selected) { n2.vx -= fx; n2.vy -= fy; n2.vz -= fz; }
+                    if(!n1.selected && !n1.isLocked) { n1.vx += fx; n1.vy += fy; n1.vz += fz; }
+                    if(!n2.selected && !n2.isLocked) { n2.vx -= fx; n2.vy -= fy; n2.vz -= fz; }
                 });
 
                 this.nodes.forEach(n => {
-                    if(n.selected || !connectedIds.has(n.id)) { n.vx = n.vy = n.vz = 0; return; }
+                    if(n.selected || n.isLocked || !connectedIds.has(n.id)) { n.vx = n.vy = n.vz = 0; return; }
                     n.vx *= 0.7; n.vy *= 0.7; n.vz *= 0.7;
                     if(Math.abs(n.vx)>0.5 || Math.abs(n.vy)>0.5 || Math.abs(n.vz)>0.5) {
                         n.base_x += n.vx; n.base_y += n.vy; n.base_z += n.vz;
@@ -1148,7 +1177,7 @@
                         width: n.width, height: n.height, opacity: n.opacity, tags: [...n.tags],
                         title: n.title, current_text: n.current_text, font_size: n.font_size,
                         text_color: n.text_color, is_bold: n.is_bold, is_italic: n.is_italic, is_strike: n.is_strike,
-                        imgUrl: n.imgUrl
+                        imgUrl: n.imgUrl, isLocked: n.isLocked
                     }))
                 };
             }
@@ -1164,6 +1193,7 @@
                     n.width = src.width; n.height = src.height; n.opacity = src.opacity !== undefined ? src.opacity : 1.0; n.tags = src.tags || [];
                     n.title = src.title; n.current_text = src.current_text; n.font_size = src.font_size;
                     n.text_color = src.text_color; n.is_bold = src.is_bold; n.is_italic = src.is_italic; n.is_strike = src.is_strike;
+                    n.isLocked = src.isLocked || false;
                     n.applyTextFormatting();
                     this.nodes.push(n);
                 });
@@ -1177,11 +1207,10 @@
                 if(this.history.length > 50) this.history.shift();
                 this.historyIdx = this.history.length - 1;
                 
-                // 브라우저 로컬 스토리지에 자동 저장할 때 이미지 용량 초과 에러 방어 처리
                 try {
                     localStorage.setItem('spatial_archive_save', JSON.stringify(data));
                 } catch(e) {
-                    console.warn("로컬 저장소 용량 초과로 자동 저장에 실패했습니다. (크기가 큰 이미지가 많을 수 있습니다)", e);
+                    console.warn("로컬 저장소 용량 초과로 자동 저장에 실패했습니다.", e);
                 }
             }
 
@@ -1199,12 +1228,51 @@
                 }
             }
 
-            saveToFile() {
-                let dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(this.serialize(), null, 2));
+            // File System Access API를 이용한 새로운 저장 방식
+            async saveToFile() {
+                let dataStr = JSON.stringify(this.serialize(), null, 2);
+                
+                if ('showSaveFilePicker' in window) {
+                    try {
+                        // 저장 경로 핸들이 없다면 새로 묻기
+                        if (!this.fileHandle) {
+                            const options = {
+                                suggestedName: 'canvas_archive.json',
+                                types: [{
+                                    description: 'JSON Files',
+                                    accept: { 'application/json': ['.json'] },
+                                }],
+                            };
+                            this.fileHandle = await window.showSaveFilePicker(options);
+                        }
+                        
+                        // 핸들이 있으면 바로 덮어쓰기
+                        const writable = await this.fileHandle.createWritable();
+                        await writable.write(dataStr);
+                        await writable.close();
+                        
+                        this.showToast("💾 파일이 성공적으로 저장되었습니다.");
+                    } catch (error) {
+                        // 사용자가 창을 그냥 닫은 경우(AbortError)는 무시, 그 외 오류는 기존 방식으로 폴백
+                        if (error.name !== 'AbortError') {
+                            console.error('File System API 저장 실패:', error);
+                            this.fallbackSave(dataStr);
+                        }
+                    }
+                } else {
+                    // File System API를 지원하지 않는 구형 브라우저 등의 경우 기존 방식으로 폴백
+                    this.fallbackSave(dataStr);
+                }
+            }
+
+            // 구형 다운로드 방식 보존
+            fallbackSave(dataStr) {
+                let dataUri = "data:text/json;charset=utf-8," + encodeURIComponent(dataStr);
                 let dlAnchorElem = document.createElement('a');
-                dlAnchorElem.setAttribute("href", dataStr);
+                dlAnchorElem.setAttribute("href", dataUri);
                 dlAnchorElem.setAttribute("download", "canvas_archive.json");
                 dlAnchorElem.click();
+                this.showToast("📥 파일 다운로드가 시작되었습니다.");
             }
 
             loadFromFile() {
