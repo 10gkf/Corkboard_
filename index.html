@@ -2,14 +2,15 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Space Archiving Canvas</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; background-color: #121212; font-family: 'Inter', sans-serif; color: white; user-select: none; }
         
-        #canvas-container { position: relative; width: 100vw; height: calc(100vh - 48px); overflow: hidden; transform-style: preserve-3d; perspective: 1000px; }
+        /* 모바일 기본 스와이프 액션 등을 방지하기 위해 touch-action: none 추가 */
+        #canvas-container { position: relative; width: 100vw; height: calc(100vh - 48px); overflow: hidden; transform-style: preserve-3d; perspective: 1000px; touch-action: none; }
         
         #line-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
@@ -20,7 +21,7 @@
         .node.ghost-node { opacity: 0.15 !important; filter: grayscale(100%); pointer-events: none; border-color: transparent; }
         .node.locked { outline: 2px solid white; outline-offset: 2px; }
         
-        .resize-handle { position: absolute; width: 12px; height: 12px; background: transparent; z-index: 30; }
+        .resize-handle { position: absolute; width: 16px; height: 16px; background: transparent; z-index: 30; } /* 터치를 위해 핸들 크기 약간 증가 */
         .resize-tl { top: 0; left: 0; cursor: nwse-resize; }
         .resize-tr { top: 0; right: 0; cursor: nesw-resize; }
         .resize-bl { bottom: 0; left: 0; cursor: nesw-resize; }
@@ -41,7 +42,7 @@
         .hidden { display: none !important; }
         
         #context-menu { position: fixed; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); padding: 4px 0; z-index: 3000; min-width: 160px; }
-        .menu-item { padding: 8px 16px; font-size: 14px; cursor: pointer; color: #e5e5e5; }
+        .menu-item { padding: 12px 16px; font-size: 14px; cursor: pointer; color: #e5e5e5; } /* 터치 편의를 위해 패딩 증가 */
         .menu-item:hover { background: #60a5fa; color: #000; }
         .menu-separator { height: 1px; background: #444; margin: 4px 0; }
     </style>
@@ -67,17 +68,17 @@
         <div class="menu-item" id="menu-zoom">Zoom Selection</div>
         <div class="menu-item" id="menu-new">New Node</div>
         <div class="menu-separator"></div>
-        <div class="menu-item" id="menu-copy">Copy (Ctrl+C)</div>
-        <div class="menu-item" id="menu-cut">Cut (Ctrl+X)</div>
-        <div class="menu-item" id="menu-paste">Paste (Ctrl+V)</div>
-        <div class="menu-item" style="color: #f87171;" id="menu-delete">Delete (Del)</div>
+        <div class="menu-item" id="menu-copy">Copy</div>
+        <div class="menu-item" id="menu-cut">Cut</div>
+        <div class="menu-item" id="menu-paste">Paste</div>
+        <div class="menu-item" style="color: #f87171;" id="menu-delete">Delete</div>
         <div class="menu-separator"></div>
-        <div class="menu-item" id="menu-save">Save to File (Ctrl+S)</div>
+        <div class="menu-item" id="menu-save">Save to File</div>
         <div class="menu-item" id="menu-load">Load from File</div>
     </div>
 
     <div id="node-modal" class="modal-overlay hidden">
-        <div class="bg-[#1e1e1e] border border-gray-600 p-6 rounded-lg shadow-2xl w-96 text-white flex flex-col gap-4" onclick="event.stopPropagation()">
+        <div class="bg-[#1e1e1e] border border-gray-600 p-6 rounded-lg shadow-2xl w-96 max-w-[90vw] text-white flex flex-col gap-4" onclick="event.stopPropagation()">
             <h2 class="text-lg font-bold">Node Properties</h2>
             
             <div class="flex flex-col gap-1">
@@ -113,7 +114,7 @@
             </div>
 
             <div class="flex flex-col gap-1 mt-2">
-                <label class="text-sm text-gray-400">Available Tags (Click to add)</label>
+                <label class="text-sm text-gray-400">Available Tags</label>
                 <div id="prop-available-tags" class="flex flex-wrap gap-2"></div>
             </div>
 
@@ -264,16 +265,27 @@
                 
                 this.state = {
                     mode: 'idle', // idle, pan, orbit, drag_node, resize_node, link, select_box
+                    touchMode: 'idle', // touch mode
                     lastMouse: {x: 0, y: 0},
                     startMouse: {x: 0, y: 0},
                     targetNode: null,
                     resizePos: null,
                     linkStart: null,
                     aspectRatio: 1,
-                    copiedNodes: []
+                    copiedNodes: [],
+                    
+                    // Touch related states
+                    lastTouchPos: {x: 0, y: 0},
+                    startTouchPos: {x: 0, y: 0},
+                    longPressTimer: null,
+                    isLongPressTriggered: false,
+                    lastTapTime: 0,
+                    initialPinchDist: 0,
+                    initialCamDistance: 0,
+                    lastTouchCenter: {x: 0, y: 0}
                 };
 
-                this.fileHandle = null; // 저장 경로 유지를 위한 핸들 추가
+                this.fileHandle = null; 
                 this.history = [];
                 this.historyIdx = -1;
 
@@ -281,7 +293,6 @@
                 window.addEventListener('resize', () => this.resizeCanvas());
                 this.bindEvents();
                 
-                // Physics and Render Loops
                 setInterval(() => this.physicsLoop(), 16);
                 requestAnimationFrame(() => this.renderLoop());
 
@@ -289,7 +300,6 @@
                 if(this.nodes.length === 0) this.createSampleData();
             }
 
-            // 알림 메시지 띄우는 유틸리티 함수
             showToast(msg) {
                 let t = document.getElementById('toast-message');
                 if(!t) {
@@ -353,7 +363,6 @@
                 let cx = this.canvas.width / 2;
                 let cy = this.canvas.height / 2;
 
-                // Render Nodes
                 this.nodes.forEach(n => {
                     let p = this.project3D(n.base_x, n.base_y, n.base_z);
                     if(!p) { n.el.style.display = 'none'; return; }
@@ -363,7 +372,6 @@
                     n.el.style.zIndex = Math.round(10000 - p.dist);
                     n.updateDOM();
 
-                    // Ghosting Logic
                     let isVisible = this.activeFilters.size === 0 || n.tags.some(t => this.activeFilters.has(t));
                     if(!isVisible) {
                         n.el.classList.add('ghost-node');
@@ -372,7 +380,6 @@
                     }
                 });
 
-                // Draw Connections (Manual -> Dashed, Transparent White)
                 this.ctx.lineWidth = 2;
                 this.ctx.setLineDash([8, 8]);
                 this.connections.forEach(c => {
@@ -390,9 +397,8 @@
                         this.ctx.stroke();
                     }
                 });
-                this.ctx.setLineDash([]); // Reset to solid
+                this.ctx.setLineDash([]); 
 
-                // Draw Tag Lines (Solid, Tag Color, No Transparency if active)
                 let tagGroups = {};
                 this.nodes.forEach(n => {
                     let tagsToDraw = this.activeFilters.size > 0 ? n.tags.filter(t => this.activeFilters.has(t)) : n.tags;
@@ -406,10 +412,8 @@
                     let group = tagGroups[tag];
                     if(group.length > 1) {
                         let hexColor = TCM.color(tag);
-                        
-                        // If filter is active but this tag isn't in it, lines should be ghosted too (handled by tagsToDraw logic)
                         this.ctx.lineWidth = 2.0; 
-                        this.ctx.strokeStyle = hexColor; // 100% Solid
+                        this.ctx.strokeStyle = hexColor; 
 
                         for(let i=0; i<group.length; i++) {
                             for(let j=i+1; j<group.length; j++) {
@@ -427,7 +431,6 @@
                     }
                 }
 
-                // Draw Linking Line (Middle Click)
                 if((this.state.mode === 'link' || this.state.mode === 'unlink') && this.state.linkStart && this.state.lastMouse) {
                     let p1 = this.project3D(this.state.linkStart.base_x, this.state.linkStart.base_y, this.state.linkStart.base_z);
                     if(p1) {
@@ -458,17 +461,23 @@
                 document.addEventListener('keydown', e => this.onKeyDown(e));
                 document.addEventListener('paste', e => this.onPaste(e));
 
-                // Drag and Drop Images
                 this.container.addEventListener('dragover', e => { 
                     e.preventDefault(); 
                     e.dataTransfer.dropEffect = 'copy';
                 });
                 this.container.addEventListener('drop', e => this.onDrop(e));
 
-                // Context Menu
+                // Touch Events
+                this.container.addEventListener('touchstart', e => this.onTouchStart(e), {passive: false});
+                this.container.addEventListener('touchmove', e => this.onTouchMove(e), {passive: false});
+                window.addEventListener('touchend', e => this.onTouchEnd(e));
+                window.addEventListener('touchcancel', e => this.onTouchEnd(e));
+
                 document.getElementById('menu-zoom').onclick = () => { this.zoomSelection(); this.closeMenu(); };
                 document.getElementById('menu-new').onclick = () => { 
-                    let w = this.getWorldPos(this.state.lastMouse.x, this.state.lastMouse.y);
+                    let x = this.state.touchMode !== 'idle' ? this.state.lastTouchPos.x : this.state.lastMouse.x;
+                    let y = this.state.touchMode !== 'idle' ? this.state.lastTouchPos.y : this.state.lastMouse.y;
+                    let w = this.getWorldPos(x, y);
                     this.addNode(new Base3DNode(w.x, w.y, w.z)); this.closeMenu(); 
                 };
                 document.getElementById('menu-copy').onclick = () => { this.copySelection(); this.closeMenu(); };
@@ -478,7 +487,6 @@
                 document.getElementById('menu-save').onclick = () => { this.saveToFile(); this.closeMenu(); };
                 document.getElementById('menu-load').onclick = () => { document.getElementById('file-input').click(); this.closeMenu(); };
 
-                // Node Modal
                 document.getElementById('prop-cancel').onclick = () => document.getElementById('node-modal').classList.add('hidden');
                 document.getElementById('prop-save').onclick = () => this.saveModal();
                 
@@ -489,7 +497,6 @@
                     }
                 });
 
-                // File Input
                 document.getElementById('file-input').onchange = e => {
                     let file = e.target.files[0];
                     if(!file) return;
@@ -497,7 +504,7 @@
                     reader.onload = ev => {
                         try {
                             this.loadData(JSON.parse(ev.target.result));
-                            this.fileHandle = null; // 파일을 새로 불러오면 저장 경로 초기화
+                            this.fileHandle = null;
                             this.showToast("파일을 성공적으로 불러왔습니다.");
                         } catch(err) { alert("Failed to load file."); }
                     };
@@ -505,7 +512,6 @@
                     e.target.value = '';
                 };
 
-                // Node Modal Formatting Buttons
                 ['bold', 'italic', 'strike'].forEach(f => {
                     let btn = document.getElementById(`prop-${f}`);
                     btn.onclick = () => {
@@ -516,17 +522,218 @@
                 });
             }
 
+            // --- Touch Interaction Logic Start ---
+            onTouchStart(e) {
+                if (e.touches.length > 2) return;
+                
+                let isUI = e.target.closest('#node-modal') || e.target.closest('#tag-bar') || e.target.closest('#import-btn-container') || e.target.closest('#context-menu');
+                if (isUI) return; 
+
+                e.preventDefault();
+
+                if (e.touches.length === 1) {
+                    let touch = e.touches[0];
+                    this.state.lastTouchPos = { x: touch.clientX, y: touch.clientY };
+                    this.state.startTouchPos = { x: touch.clientX, y: touch.clientY };
+                    this.state.isLongPressTriggered = false;
+
+                    this.state.longPressTimer = setTimeout(() => {
+                        this.state.isLongPressTriggered = true;
+                        this.showContextMenu(touch.clientX, touch.clientY);
+                        if(navigator.vibrate) navigator.vibrate(50);
+                    }, 500);
+
+                    let handle = e.target.closest('.resize-handle');
+                    if (handle) {
+                        this.state.touchMode = 'resize_node';
+                        this.state.targetNode = this.getNodeFromEvent(e);
+                        this.state.resizePos = handle.dataset.pos;
+                        this.state.startWidth = this.state.targetNode.width;
+                        this.state.startHeight = this.state.targetNode.height;
+                        this.state.aspectRatio = this.state.startWidth / this.state.startHeight;
+                        return;
+                    }
+
+                    let node = this.getNodeFromEvent(e);
+                    if (node) {
+                        if (node.el.classList.contains('ghost-node')) {
+                            this.state.touchMode = 'orbit';
+                            return;
+                        }
+                        this.state.touchMode = 'drag_node';
+                        this.state.targetNode = node;
+                        if (!node.selected) {
+                            this.clearSelection();
+                            node.selected = true;
+                        }
+                    } else {
+                        this.state.touchMode = 'orbit';
+                        this.clearSelection();
+                        this.closeMenu();
+                    }
+                } else if (e.touches.length === 2) {
+                    clearTimeout(this.state.longPressTimer);
+                    
+                    let t1 = e.touches[0];
+                    let t2 = e.touches[1];
+                    
+                    this.state.touchMode = 'zoom_pan';
+                    
+                    let dx = t2.clientX - t1.clientX;
+                    let dy = t2.clientY - t1.clientY;
+                    this.state.initialPinchDist = Math.hypot(dx, dy);
+                    this.state.initialCamDistance = this.cam.distance;
+                    
+                    this.state.lastTouchCenter = {
+                        x: (t1.clientX + t2.clientX) / 2,
+                        y: (t1.clientY + t2.clientY) / 2
+                    };
+                    this.closeMenu();
+                }
+            }
+
+            onTouchMove(e) {
+                let isUI = e.target.closest('#node-modal') || e.target.closest('#tag-bar') || e.target.closest('#import-btn-container') || e.target.closest('#context-menu');
+                if (isUI) return;
+                
+                e.preventDefault();
+
+                if (e.touches.length === 1 && this.state.touchMode !== 'zoom_pan') {
+                    let touch = e.touches[0];
+                    let dxDelta = touch.clientX - this.state.lastTouchPos.x;
+                    let dyDelta = touch.clientY - this.state.lastTouchPos.y;
+                    let dxTotal = touch.clientX - this.state.startTouchPos.x;
+                    let dyTotal = touch.clientY - this.state.startTouchPos.y;
+
+                    if (Math.hypot(dxTotal, dyTotal) > 10) {
+                        clearTimeout(this.state.longPressTimer);
+                    }
+
+                    if (this.state.isLongPressTriggered) {
+                        this.state.lastTouchPos = { x: touch.clientX, y: touch.clientY };
+                        return;
+                    }
+
+                    if (this.state.touchMode === 'orbit') {
+                        this.cam.yaw -= dxDelta * 0.005;
+                        this.cam.pitch -= dyDelta * 0.005;
+                        this.cam.pitch = Math.max(-Math.PI/3, Math.min(Math.PI/3, this.cam.pitch));
+                    } else if (this.state.touchMode === 'drag_node' && this.state.targetNode) {
+                        let scale = this.fovScale / (this.cam.distance - this.project3D(this.state.targetNode.base_x, this.state.targetNode.base_y, this.state.targetNode.base_z).z2);
+                        let dx_cam = dxDelta / scale;
+                        let dy_cam = dyDelta / scale;
+
+                        let dz1 = dy_cam * Math.sin(-this.cam.pitch);
+                        let ldy = dy_cam * Math.cos(-this.cam.pitch);
+                        let ldx = dx_cam * Math.cos(-this.cam.yaw) - dz1 * Math.sin(-this.cam.yaw);
+                        let ldz = dx_cam * Math.sin(-this.cam.yaw) + dz1 * Math.cos(-this.cam.yaw);
+
+                        this.nodes.filter(n => n.selected && !n.isLocked).forEach(n => {
+                            n.base_x += ldx; n.base_y += ldy; n.base_z += ldz;
+                        });
+                    } else if (this.state.touchMode === 'resize_node' && this.state.targetNode) {
+                        if (this.state.targetNode.isLocked) return;
+                        
+                        let scale = this.project3D(this.state.targetNode.base_x, this.state.targetNode.base_y, this.state.targetNode.base_z).scale;
+                        let ndx = dxTotal / scale;
+                        let ndy = dyTotal / scale;
+                        
+                        let w = this.state.startWidth;
+                        let h = this.state.startHeight;
+                        let pos = this.state.resizePos;
+
+                        if(pos.includes('r')) w += ndx; else w -= ndx;
+                        if(pos.includes('b')) h += ndy; else h -= ndy;
+
+                        w = Math.max(50, w);
+                        h = Math.max(50, h);
+
+                        this.state.targetNode.width = w;
+                        this.state.targetNode.height = h;
+                    }
+
+                    this.state.lastTouchPos = { x: touch.clientX, y: touch.clientY };
+
+                } else if (e.touches.length === 2 && this.state.touchMode === 'zoom_pan') {
+                    let t1 = e.touches[0];
+                    let t2 = e.touches[1];
+                    
+                    let dx = t2.clientX - t1.clientX;
+                    let dy = t2.clientY - t1.clientY;
+                    let currentDist = Math.hypot(dx, dy);
+                    
+                    let center = {
+                        x: (t1.clientX + t2.clientX) / 2,
+                        y: (t1.clientY + t2.clientY) / 2
+                    };
+                    
+                    let panDx = center.x - this.state.lastTouchCenter.x;
+                    let panDy = center.y - this.state.lastTouchCenter.y;
+                    this.cam.panX += panDx;
+                    this.cam.panY += panDy;
+                    
+                    if (this.state.initialPinchDist > 0) {
+                        let ratio = this.state.initialPinchDist / currentDist;
+                        this.cam.distance = this.state.initialCamDistance * ratio;
+                        this.cam.distance = Math.max(200, this.cam.distance);
+                    }
+                    
+                    this.state.lastTouchCenter = center;
+                }
+            }
+
+            onTouchEnd(e) {
+                clearTimeout(this.state.longPressTimer);
+
+                if (e.touches.length === 0) {
+                    let now = Date.now();
+                    let dx = this.state.lastTouchPos.x - this.state.startTouchPos.x;
+                    let dy = this.state.lastTouchPos.y - this.state.startTouchPos.y;
+                    let isTap = !this.state.isLongPressTriggered && this.state.startTouchPos && Math.hypot(dx, dy) < 10;
+
+                    if (isTap) {
+                        if (this.state.lastTapTime && (now - this.state.lastTapTime < 300)) {
+                            let targetEl = document.elementFromPoint(this.state.lastTouchPos.x, this.state.lastTouchPos.y);
+                            if (targetEl) {
+                                let fakeEvent = {
+                                    target: targetEl,
+                                    clientX: this.state.lastTouchPos.x,
+                                    clientY: this.state.lastTouchPos.y,
+                                    button: 0,
+                                    preventDefault: () => {}
+                                };
+                                this.onDoubleClick(fakeEvent);
+                            }
+                            this.state.lastTapTime = 0;
+                        } else {
+                            this.state.lastTapTime = now;
+                        }
+                    }
+
+                    if(this.state.touchMode === 'drag_node' || this.state.touchMode === 'resize_node') {
+                        this.saveState();
+                    }
+
+                    this.state.touchMode = 'idle';
+                    this.state.targetNode = null;
+                    this.state.isLongPressTriggered = false;
+                } else if (e.touches.length === 1) {
+                    this.state.touchMode = 'idle';
+                }
+            }
+            // --- Touch Interaction Logic End ---
+
             onMouseDown(e) {
-                if(e.button === 2) { // Right Click
+                if(e.button === 2) { 
                     if(e.ctrlKey || e.metaKey) {
                         this.state.mode = 'zoom_drag';
                         this.container.style.cursor = 'ns-resize';
                         this.state.zoomTarget = this.getWorldPos(e.clientX, e.clientY);
                     } else if(e.shiftKey) {
-                        this.state.mode = 'pan'; // 2D Pan
+                        this.state.mode = 'pan'; 
                         this.container.style.cursor = 'grab';
                     } else {
-                        this.state.mode = 'orbit'; // 3D Orbit
+                        this.state.mode = 'orbit'; 
                         this.container.style.cursor = 'move';
                     }
                     this.state.startMouse = {x: e.clientX, y: e.clientY};
@@ -535,7 +742,7 @@
                     return;
                 }
 
-                if(e.button === 1) { // Middle Click
+                if(e.button === 1) { 
                     let node = this.getNodeFromEvent(e);
                     if(node) {
                         if (e.ctrlKey || e.metaKey) {
@@ -549,7 +756,7 @@
                     return;
                 }
 
-                if(e.button === 0) { // Left Click
+                if(e.button === 0) { 
                     let handle = e.target.closest('.resize-handle');
                     if(handle) {
                         this.state.mode = 'resize_node';
@@ -565,7 +772,7 @@
 
                     let node = this.getNodeFromEvent(e);
                     if(node) {
-                        if(node.el.classList.contains('ghost-node')) return; // Ignore ghosted nodes
+                        if(node.el.classList.contains('ghost-node')) return; 
                         
                         if(e.altKey) {
                             let n = node.type === 'image' ? new ImageNode(node.base_x + 20, node.base_y + 20, node.base_z, node.imgUrl) : new Base3DNode(node.base_x + 20, node.base_y + 20, node.base_z);
@@ -598,7 +805,6 @@
                             this.state.mode = 'idle';
                         }
                     } else {
-                        // Rubber band selection
                         this.state.mode = 'select_box';
                         this.state.startMouse = {x: e.clientX, y: e.clientY};
                         this.state.lastMouse = {x: e.clientX, y: e.clientY};
@@ -663,7 +869,7 @@
                     });
                 }
                 else if(this.state.mode === 'resize_node' && this.state.targetNode) {
-                    if (this.state.targetNode.isLocked) return; // 잠금 시 노드 크기 조절 막기
+                    if (this.state.targetNode.isLocked) return; 
                     
                     let scale = this.project3D(this.state.targetNode.base_x, this.state.targetNode.base_y, this.state.targetNode.base_z).scale;
                     let ndx = dxTotal / scale;
@@ -679,7 +885,6 @@
                     w = Math.max(50, w);
                     h = Math.max(50, h);
 
-                    // Maintain Aspect Ratio on Shift
                     if(e.shiftKey) {
                         h = w / this.state.aspectRatio;
                     }
@@ -738,7 +943,6 @@
                     }
                 }
                 else if(this.state.mode === 'pan' || this.state.mode === 'orbit' || this.state.mode === 'zoom_drag') {
-                    // Check distance to see if it was a drag or a click
                     let dist = Math.hypot(e.clientX - this.state.startMouse.x, e.clientY - this.state.startMouse.y);
                     if(dist < 5 && e.button === 2 && this.state.mode !== 'zoom_drag') {
                         this.showContextMenu(e.clientX, e.clientY);
@@ -788,7 +992,7 @@
                         let selectedNodes = this.nodes.filter(n => n.selected);
                         if(selectedNodes.length === 0) return;
 
-                        if(e.shiftKey) {
+                        if(e.altKey) {
                             selectedNodes.forEach(n => n.isLocked = false);
                             this.showToast("🔓 선택된 노드 잠금 해제됨");
                         } else {
@@ -832,7 +1036,9 @@
                         reader.onload = (event) => {
                             let img = new Image();
                             img.onload = () => {
-                                let w = this.getWorldPos(this.state.lastMouse.x || window.innerWidth/2, this.state.lastMouse.y || window.innerHeight/2);
+                                let x = this.state.touchMode !== 'idle' ? this.state.lastTouchPos.x : (this.state.lastMouse.x || window.innerWidth/2);
+                                let y = this.state.touchMode !== 'idle' ? this.state.lastTouchPos.y : (this.state.lastMouse.y || window.innerHeight/2);
+                                let w = this.getWorldPos(x, y);
                                 let node = new ImageNode(w.x, w.y, w.z, event.target.result);
                                 
                                 let ratio = img.width / img.height;
@@ -884,7 +1090,7 @@
             }
 
             getNodeFromEvent(e) {
-                let el = e.target.closest('.node');
+                let el = e.target && e.target.closest ? e.target.closest('.node') : null;
                 return el ? this.nodes.find(n => n.id === el.id) : null;
             }
 
@@ -963,7 +1169,10 @@
             pasteFromAppClipboard() {
                 if(!this.state.copiedNodes.length) return;
                 this.clearSelection();
-                let w = this.getWorldPos(this.state.lastMouse.x || window.innerWidth/2, this.state.lastMouse.y || window.innerHeight/2);
+                
+                let x = this.state.touchMode !== 'idle' ? this.state.lastTouchPos.x : (this.state.lastMouse.x || window.innerWidth/2);
+                let y = this.state.touchMode !== 'idle' ? this.state.lastTouchPos.y : (this.state.lastMouse.y || window.innerHeight/2);
+                let w = this.getWorldPos(x, y);
                 
                 this.state.copiedNodes.forEach(src => {
                     let n = src.type === 'image' 
@@ -1228,13 +1437,11 @@
                 }
             }
 
-            // File System Access API를 이용한 새로운 저장 방식
             async saveToFile() {
                 let dataStr = JSON.stringify(this.serialize(), null, 2);
                 
                 if ('showSaveFilePicker' in window) {
                     try {
-                        // 저장 경로 핸들이 없다면 새로 묻기
                         if (!this.fileHandle) {
                             const options = {
                                 suggestedName: 'canvas_archive.json',
@@ -1246,26 +1453,22 @@
                             this.fileHandle = await window.showSaveFilePicker(options);
                         }
                         
-                        // 핸들이 있으면 바로 덮어쓰기
                         const writable = await this.fileHandle.createWritable();
                         await writable.write(dataStr);
                         await writable.close();
                         
                         this.showToast("💾 파일이 성공적으로 저장되었습니다.");
                     } catch (error) {
-                        // 사용자가 창을 그냥 닫은 경우(AbortError)는 무시, 그 외 오류는 기존 방식으로 폴백
                         if (error.name !== 'AbortError') {
                             console.error('File System API 저장 실패:', error);
                             this.fallbackSave(dataStr);
                         }
                     }
                 } else {
-                    // File System API를 지원하지 않는 구형 브라우저 등의 경우 기존 방식으로 폴백
                     this.fallbackSave(dataStr);
                 }
             }
 
-            // 구형 다운로드 방식 보존
             fallbackSave(dataStr) {
                 let dataUri = "data:text/json;charset=utf-8," + encodeURIComponent(dataStr);
                 let dlAnchorElem = document.createElement('a');
@@ -1292,8 +1495,8 @@
             }
 
             createSampleData() {
-                let n1 = new Base3DNode(-400, -100, -200); n1.title = "Welcome!"; n1.current_text = "Double click empty space to create nodes.\nShift + Right-click drag to pan."; n1.tags = ["Guide"]; n1.applyTextFormatting();
-                let n2 = new Base3DNode(400, 100, 200); n2.title = "Connections"; n2.current_text = "Middle click and drag\nbetween nodes to link them."; n2.tags = ["Guide"]; n2.applyTextFormatting();
+                let n1 = new Base3DNode(-400, -100, -200); n1.title = "Welcome!"; n1.current_text = "Double tap to edit nodes.\nTouch & drag to rotate."; n1.tags = ["Guide"]; n1.applyTextFormatting();
+                let n2 = new Base3DNode(400, 100, 200); n2.title = "Mobile Controls"; n2.current_text = "Two fingers to pan.\nPinch to zoom in/out.\nLong press for menu."; n2.tags = ["Guide"]; n2.applyTextFormatting();
                 this.addNode(n1); this.addNode(n2);
                 this.saveState();
             }
